@@ -1,299 +1,201 @@
-"""
-The main execution file containing game loops
-"""
-
-# Python modules
-import pygame
 import sys
-import math
+import pygame
 
-# Game modules
-import overworld
-from dex import dex
 import battlescript
-import pokemon
-import moves
-import playerdata
-import dumbstuffdontlookinhere as uhh
+import overworld
+import intro
+from classes import playerdata
+from classes import gameflags
 
-# Initialize pygame
-pygame.init()
+gameflags.clear_all_flags()
 
-# Screen setup
-SCREEN_WIDTH, SCREEN_HEIGHT = 832, 640
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-pygame.display.set_caption("Pokemon Orange")
 
-clock = pygame.time.Clock()
+# ----------------------------
+# CONFIG
+# ----------------------------
+BASE_WIDTH = 500
+BASE_HEIGHT = 500
 FPS = 60
+WINDOW_TITLE = "Pokemon Orange"
+FONT_PATH = "resources/font/munro.ttf"
 
-"""
-Overworld Constants
-"""
-BLACK = (0, 0, 0)
-TILE_SIZE = 64
-MOVE_DURATION_BASE = 0.25
-SPEED_MULTIPLIER_FAST = 2
 
-overworld.settiles()
+def get_scaled_rect(window_size):
+    """
+    Return the largest rectangle with the game's aspect ratio
+    that fits inside the current window.
+    """
+    window_width, window_height = window_size
 
-#gamefont
-gamefont = pygame.font.Font("resources/font/munro.ttf", 52)
-gamefontsmall = pygame.font.Font("resources/font/munro.ttf", 30)
+    scale = min(window_width / BASE_WIDTH, window_height / BASE_HEIGHT)
+    scaled_width = int(BASE_WIDTH * scale)
+    scaled_height = int(BASE_HEIGHT * scale)
 
-# Load 64x64 player sprites (no scaling needed)
-player_sprites = {}
-player_sprites['d1'] = pygame.image.load("graphics/sprites/player/playerd1.png").convert_alpha()
-player_sprites['d2'] = pygame.image.load("graphics/sprites/player/playerd2.png").convert_alpha()
-player_sprites['d3'] = pygame.image.load("graphics/sprites/player/playerd3.png").convert_alpha()
+    offset_x = (window_width - scaled_width) // 2
+    offset_y = (window_height - scaled_height) // 2
 
-player_sprites['u1'] = pygame.image.load("graphics/sprites/player/playeru1.png").convert_alpha()
-player_sprites['u2'] = pygame.image.load("graphics/sprites/player/playeru2.png").convert_alpha()
-player_sprites['u3'] = pygame.image.load("graphics/sprites/player/playeru3.png").convert_alpha()
+    return pygame.Rect(offset_x, offset_y, scaled_width, scaled_height)
 
-player_sprites['l1'] = pygame.image.load("graphics/sprites/player/playerl1.png").convert_alpha()
-player_sprites['l2'] = pygame.image.load("graphics/sprites/player/playerl2.png").convert_alpha()
-player_sprites['l3'] = pygame.image.load("graphics/sprites/player/playerl3.png").convert_alpha()
 
-player_sprites['r1'] = pygame.image.load("graphics/sprites/player/playerr1.png").convert_alpha()
-player_sprites['r2'] = pygame.image.load("graphics/sprites/player/playerr2.png").convert_alpha()
-player_sprites['r3'] = pygame.image.load("graphics/sprites/player/playerr3.png").convert_alpha()
+def window_to_game_coords(mouse_pos, scaled_rect):
+    """
+    Convert a mouse position from window coordinates into
+    internal game-surface coordinates.
+    """
+    mouse_x, mouse_y = mouse_pos
 
-player_rect = player_sprites['d1'].get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
+    if not scaled_rect.collidepoint(mouse_x, mouse_y):
+        return None
 
-#menu stuff
-overworldselecter = pygame.transform.scale(pygame.image.load("graphics/ui/overworldselecter.png").convert(), (32, 32))
-overworldselectpositiondefault = [565, 45]
-overworldselectposition = [565, 45]
-overworldoptions = pygame.transform.scale(pygame.image.load("graphics/ui/overworldoptions.png").convert(), (280, 472))
-overworldoptionsposition = [545, 5]
-overworldoptiondescription = pygame.transform.scale(pygame.image.load("graphics/ui/overworldoptiondescription.png").convert(), (968, 156))
-overworldoptiondescriptionposition = [-20, 500]
-overworldmenuoptions = {0: 0,1: 60,2: 120,3: 180,4: 240,5: 300,6: 360}
-overworldmenuoption = 0
+    game_x = (mouse_x - scaled_rect.x) * BASE_WIDTH / scaled_rect.width
+    game_y = (mouse_y - scaled_rect.y) * BASE_HEIGHT / scaled_rect.height
 
-#default map
-game_map = overworld.getstagefromfile('playerhouse2')
+    return int(game_x), int(game_y)
 
-enemyparty = {}
-# Player logical grid position
-player_grid = [0, 0]
-player_grid[0] = game_map.position[1]
-player_grid[1] = game_map.position[0]
 
-# Scroll offset (camera position)
-offset = [0, 0]
-offset[0] = SCREEN_WIDTH // 2 - player_grid[0] * TILE_SIZE - TILE_SIZE // 2
-offset[1] = SCREEN_HEIGHT // 2 - player_grid[1] * TILE_SIZE - TILE_SIZE // 2
+def create_fonts():
+    """Create the main fonts used by the game."""
+    gamefont = pygame.font.Font(FONT_PATH, BASE_HEIGHT // 10)
+    gamefont_small = pygame.font.Font(FONT_PATH, BASE_HEIGHT // 20)
+    gamefont_tiny = pygame.font.Font(FONT_PATH, BASE_HEIGHT // 25)
+    return gamefont, gamefont_small, gamefont_tiny
 
-# Movement state
-moving = False
-move_dir = (0, 0)
-move_progress = 0
-move_frames = 0
-speed_per_frame = 0
-facing = 'd'
-movement = '1'
-interacting = False
 
-#gamestate: straight forward (title, overworld, battle, cutscene)
-gamestate = 'overworld'
-battletype = 'wild'
-battlestage = 'default'
-weather = 'none'
-terrain = 'none'
-menulayer = 'overworldmenu'
+def start_overworld():
+    """Create the starting overworld state."""
+    return overworld.build_stage()
 
-#dont look here
-mario = uhh.DOTHEMARIO(screen)
 
-keystates = {}
-def waskeypressed(key_):
-    keys_ = pygame.key.get_pressed()
+def start_battle_from_encounter(encounter, player):
+    """
+    Build a battle object from an encounter list.
+
+    Expected format:
+    ['wild', pokemon]
+    or
+    ['trainerid', pokemon1, pokemon2, ...]
+    """
+    encounter_type = encounter[0] if encounter[0] == 'wild' else 'trainer'
+    enemy_party = [encounter[1]] if encounter_type == "wild" else encounter[1:]
+
+    return battlescript.start_battle(
+        playerdata.get_player_party(player),
+        enemy_party,
+        battlefield="default",
+        weather=None,
+        terrain=None,
+        can_run=(encounter_type == "wild"),
+        ai=encounter_type,
+        enemy_id = None if encounter[0] == 'wild' else encounter[0]
+    )
+
+
+def main():
+    pygame.init()
+
+    window = pygame.display.set_mode((BASE_WIDTH, BASE_HEIGHT), pygame.RESIZABLE)
+    pygame.display.set_caption(WINDOW_TITLE)
+
+    game_surface = pygame.Surface((BASE_WIDTH, BASE_HEIGHT))
+    clock = pygame.time.Clock()
+    gamefont, gamefont_small, gamefont_tiny = create_fonts()
+
+    gamestate = "intro"
+
+    # Initial state objects
+    player = playerdata.Player("", "", [], {})
+    game_stage = start_overworld()
+    battle = None
+    introduction = intro.Introduction(0)
+
+    running = True
+    while running:
+        clock.tick(FPS)
+        window.fill((0, 0, 0))
+        game_surface.fill((20, 20, 20))
+
+        keys = pygame.key.get_pressed()
+        pressed_key = None
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+            elif event.type == pygame.VIDEORESIZE:
+                window = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
+
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                scaled_rect = get_scaled_rect(window.get_size())
+                game_mouse = window_to_game_coords(event.pos, scaled_rect)
+                if game_mouse is not None:
+                    print("Game-space mouse:", game_mouse)
+
+            elif event.type == pygame.KEYDOWN:
+                pressed_key = event.key
+
+                if gamestate == 'intro':
+                    intro.handle_text_input(event, introduction)
     
-    if keys_[key_]:
-        if not keystates.get(key_, False):
-            keystates[key_] = True
-            return True
-        
-    else:
-        keystates[key_] = False
-    return False
 
-# === MAIN GAME LOOP ===
-while True:
-    screen.fill(BLACK)
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            pygame.quit()
-            sys.exit()
+        if gamestate == "intro":
+            new_gamestate, player = intro.check_action(pressed_key, introduction)
 
-    keys = pygame.key.get_pressed()
-    
-    #main overworld loop
-    if gamestate == 'overworld':
-    
-        #uhh
-        if 'mario' in game_map.events.values():
-            gamestate = 'oneone'
-            continue
-        
-        # Start movement
-        if not moving and not interacting:
-            movement = '1'
-            dir_x, dir_y = 0, 0
-                
-            if waskeypressed(pygame.K_RETURN):
-                menulayer = 'overworldmenu'
-                gamestate = 'pausemenu'
-            
-            if keys[pygame.K_LEFT]:
-                dir_x = -1
-                facing = 'l'
-                movement = '1'
-            elif keys[pygame.K_RIGHT]:
-                dir_x = 1
-                facing = 'r'
-                movement = '1'
-            elif keys[pygame.K_UP]:
-                dir_y = -1
-                facing = 'u'
-                movement = '1'
-            elif keys[pygame.K_DOWN]:
-                dir_y = 1
-                facing = 'd'
-                movement = '1'
-    
-            target_x = player_grid[0] + dir_x
-            target_y = player_grid[1] + dir_y
-    
-            if (dir_x != 0 or dir_y != 0) and game_map.is_passable(target_x, target_y):
-                is_fast = keys[pygame.K_x]
-                duration = MOVE_DURATION_BASE / SPEED_MULTIPLIER_FAST if is_fast else MOVE_DURATION_BASE
-                move_frames = int(duration * FPS)
-                speed_per_frame = TILE_SIZE / move_frames
-    
-                move_dir = (dir_x, dir_y)
-                moving = True
-                game_map.position[0] += dir_y
-                game_map.position[1] += dir_x
-                move_progress = 0
-    
-        # Smooth scrolling movement
-        if moving:
-            dx = -move_dir[0] * speed_per_frame
-            dy = -move_dir[1] * speed_per_frame
-            offset[0] += dx
-            offset[1] += dy
-            move_progress += 1
-            if move_progress >= 0.75 * move_frames:
-                movement = '3'
-            elif move_progress >= 0.50 * move_frames:
-                movement = '1'
-            elif move_progress >= 0.25 * move_frames:
-                movement = '2'
-            else:
-                movement = '1'
-            if move_progress >= move_frames:
-                moving = False
-                player_grid[0] += move_dir[0]
-                player_grid[1] += move_dir[1]
-                
-                
-                # check if we need to warp the player and do so
-                if overworld.checkwarp(game_map):
-                    game_map = overworld.warpplayer()
-                    player_grid[0] = game_map.position[1]
-                    player_grid[1] = game_map.position[0]
-                    offset[0] = SCREEN_WIDTH // 2 - player_grid[0] * TILE_SIZE - TILE_SIZE // 2
-                    offset[1] = SCREEN_HEIGHT // 2 - player_grid[1] * TILE_SIZE - TILE_SIZE // 2
-    
-                #check if the player should enter battle
-                if overworld.checkwildbattle(game_map):
-                    enemyparty.clear()
-                    enemyparty[1] = overworld.getwildpokemon(game_map)
-                    battletype = 'wild'
-                    battlestage = 'default'
-                    gamestate = 'battle'
-    
-        # Draw map
-        game_map.draw(screen, offset[0], offset[1])
-        #print(offset_x, offset_y)
-    
-        # Draw player (fixed position)
-        screen.blit(player_sprites[facing + movement], player_rect)
-        
-    #main battle loop
-    elif gamestate == 'battle':
-        
-        if battlescript.turnstate[0] == 'battlestart':
-            battlescript.enterBattle('default', battletype, playerdata.playerparty, enemyparty, weather, terrain)
-            battlescript.draw(screen)
-        
-        elif battlescript.turnstate[0] == 'moveselect':
-            battlescript.draw(screen)
-            gamestate = battlescript.playerallowselection(battletype, gamefont, gamefontsmall, screen)
-    
-    #main menu loop
-    elif gamestate == 'pausemenu':
-        if menulayer == 'overworldmenu':
-            #draw the map and player in the background first
-            game_map.draw(screen, offset[0], offset[1])
-            screen.blit(player_sprites[facing + movement], player_rect)
+            if new_gamestate == "overworld":
+                gamestate = "overworld"
 
-            #so we're actually gunna draw the menu before the input to make sliding into different menus smooth
-            screen.blit(overworldoptiondescription, overworldoptiondescriptionposition)
-            screen.blit(overworldoptions, overworldoptionsposition)
-            screen.blit(overworldselecter, overworldselectposition)
+                # optional, depending on how your player data works:
+                # playerdata.player_name = introduction.player_name
+                # playerdata.starter = introduction.player_starter
 
-            #look for player input
-            if waskeypressed(pygame.K_UP):
-                overworldmenuoption = (overworldmenuoption - 1) % 7
-                overworldselectposition[1] = overworldselectpositiondefault[1] + overworldmenuoptions[overworldmenuoption]
-            elif waskeypressed(pygame.K_DOWN):
-                overworldmenuoption = (overworldmenuoption + 1) % 7
-                overworldselectposition[1] = overworldselectpositiondefault[1] + overworldmenuoptions[overworldmenuoption]
-            elif waskeypressed(pygame.K_RETURN) or waskeypressed(pygame.K_x):
-                overworldselectposition = [565, 45]
-                overworldmenuoption = 0
-                gamestate = 'overworld'
-            elif waskeypressed(pygame.K_z):
-                if overworldmenuoption == 0:
-                    menulayer = 'pokedex'
-                elif overworldmenuoption == 1:
-                    menulayer = 'playerparty'
-                elif overworldmenuoption == 2:
-                    menulayer = 'playerbag'
-                elif overworldmenuoption == 3:
-                    menulayer = 'playeroption'
-                elif overworldmenuoption == 4:
-                    menulayer = 'save'
-                elif overworldmenuoption == 5:
-                    menulayer = 'option'
-                elif overworldmenuoption == 6:
-                    overworldselectposition = [565, 45]
-                    overworldmenuoption = 0
-                    gamestate = 'overworld'
-        elif menulayer == 'pokedex':
-            if not playerdata.displaypokedex():
-                menulayer = 'overworldmenu'
-        elif menulayer == 'playerparty':
-            if not playerdata.displayparty():
-                menulayer = 'overworldmenu'
-        elif menulayer == 'playerbag':
-            if not playerdata.displaybag():
-                menulayer = 'overworldmenu'
-        elif menulayer == 'playermenu':
-            if not playerdata.displayplayer():
-                menulayer = 'overworldmenu'
-        elif menulayer == 'save':
-            pass
-        elif menulayer == 'option':
-            pass
-    
-    elif gamestate == 'oneone':
-        if not mario.SWINGYOURARMS():
-            gamestate = 'overworld'
-        
-    pygame.display.flip()
-    clock.tick(FPS)
+                game_stage = start_overworld()
+            if new_gamestate == None:
+                intro.draw(game_surface, introduction, gamefont, gamefont_small, gamefont_tiny)
+
+        elif gamestate == "overworld":
+            game_stage, movement, facing, offset, new_gamestate, encounter = overworld.check_action(
+                keys,
+                game_stage,
+                FPS,
+                BASE_WIDTH,
+                BASE_HEIGHT,
+                pressed_key,
+                player,
+            )
+
+            if new_gamestate == "battle" and encounter is not None:
+                gamestate = "battle"
+                battle = start_battle_from_encounter(encounter, player)
+
+            overworld.draw(
+                game_stage,
+                overworld.get_player_sprites(player),
+                movement,
+                facing,
+                game_surface,
+                offset,
+                gamefont_tiny
+            )
+
+        elif gamestate == "battle":
+            new_gamestate = battlescript.check_action(pressed_key, battle)
+            if new_gamestate == "overworld":
+                gamestate = "overworld"
+
+            battlescript.draw(battle, game_surface, gamefont, gamefont_small)
+
+        # Scale the fixed-resolution game surface into the resizable window.
+        scaled_rect = get_scaled_rect(window.get_size())
+        scaled_surface = pygame.transform.scale(
+            game_surface,
+            (scaled_rect.width, scaled_rect.height),
+        )
+
+        window.blit(scaled_surface, scaled_rect.topleft)
+        pygame.display.flip()
+
+    pygame.quit()
+    sys.exit()
+
+
+if __name__ == "__main__":
+    main()

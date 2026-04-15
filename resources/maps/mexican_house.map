@@ -1,0 +1,11 @@
+inside:true
+objects:npc,2,1,north.mexican.Jose.none
+warps:2,3,mar_a_lago,10,8
+connections:none
+wild:none
+conditions:
+configuration:
+0133,0133,0133,0133,0133
+0133,0007,0007,0007,0133
+0133,0007,0007,0007,0133
+0133,0133,0007,0133,0133
